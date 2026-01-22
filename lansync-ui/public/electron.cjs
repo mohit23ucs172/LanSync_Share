@@ -7,7 +7,7 @@ const http = require('http');
 const os = require('os'); // Added to find Wi-Fi IP
 
 // --- CONFIGURATION ---
-const TRACKER_URL = process.env.TRACKER_URL || 'http://localhost:3000';
+const TRACKER_URL = process.env.TRACKER_URL 
 
 let mainWindow;
 let myPort;

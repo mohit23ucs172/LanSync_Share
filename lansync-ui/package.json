@@ -1,0 +1,59 @@
+{
+  "name": "lansync-ui",
+  "productName": "LanSync",
+  "version": "1.0.0",
+  "description": "P2P File Sharing for Local Networks",
+  "author": "Mohit",
+  "private": true,
+  "type": "module",
+  "main": "public/electron.cjs",
+  "scripts": {
+    "start": "vite",
+    "build": "vite build",
+    "electron": "wait-on tcp:5173 && electron .",
+    "dev": "concurrently -k \"cross-env BROWSER=none npm start\" \"npm run electron\"",
+    "dist": "vite build && electron-builder"
+  },
+  "dependencies": {
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "dotenv": "^17.2.3",
+    "electron-is-dev": "^2.0.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "socket.io-client": "^4.7.4",
+    "wait-on": "^9.0.3"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^29.1.0",
+    "electron-builder": "^24.13.3",
+    "eslint": "^9.39.1",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "vite": "^7.2.4"
+  },
+  "build": {
+    "appId": "com.lansync.app",
+    "productName": "LanSync",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "public/**/*",
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "public/electron.cjs"
+    },
+    "win": {
+      "target": "nsis",
+      "icon": "public/icon.ico"
+    }
+  }
+}

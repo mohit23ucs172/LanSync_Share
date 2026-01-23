@@ -1,111 +1,130 @@
-// public/electron.cjs
 require('dotenv').config(); 
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
 const isDev = require('electron-is-dev');
 const http = require('http');
 const os = require('os'); 
+const fs = require('fs'); // Need File System to read real files
 
 // --- CONFIGURATION ---
-// 🔴 FIX: We removed process.env.TRACKER_URL because it fails in the .exe
-// 🟢 WE HARDCODED YOUR RENDER URL HERE:
+// 🟢 HARDCODED CLOUD URL (Keep this!)
 const TRACKER_URL = 'https://lansync-backend.onrender.com';
 
 let mainWindow;
 let myPort;
-// FAKE FILES (For demo purposes)
-let myFiles = ['assignment_solution.pdf', 'ubuntu_22_04.iso', 'funny_cat.mp4']; 
+let socket;
 
-// --- HELPER: GET LOCAL WI-FI IP ---
+// 🟢 REAL FILE STORAGE
+// We store objects: { name: "notes.pdf", path: "C:/Users/Ajay/Documents/notes.pdf" }
+let mySharedFiles = []; 
+
 function getLocalIP() {
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
-      // Find IPv4 that is NOT internal (not 127.0.0.1)
-      if (net.family === 'IPv4' && !net.internal) {
-        return net.address;
-      }
+      if (net.family === 'IPv4' && !net.internal) return net.address;
     }
   }
-  return 'localhost'; // Fallback
+  return 'localhost';
 }
 
-// --- A. CREATE THE WINDOW ---
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 900,
-    height: 700,
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false
-    },
+    width: 900, height: 700,
+    webPreferences: { nodeIntegration: true, contextIsolation: false },
   });
-
-  mainWindow.loadURL(
-    isDev 
-      ? 'http://localhost:5173' 
-      : `file://${path.join(__dirname, '../dist/index.html')}`
-  );
+  mainWindow.loadURL(isDev ? 'http://localhost:5173' : `file://${path.join(__dirname, '../dist/index.html')}`);
 }
 
-// --- B. START THE FILE SERVER ---
+// --- 🟢 REAL FILE SERVER ---
 function startFileServer() {
   myPort = Math.floor(Math.random() * (9000 - 4000) + 4000);
 
   const server = http.createServer((req, res) => {
-    const fileName = req.url.slice(1);
-    console.log(`[Electron] Incoming request for: ${fileName}`);
-    res.writeHead(200, { 'Content-Type': 'text/plain' });
-    res.end(`SUCCESS! Downloaded ${fileName} from ${getLocalIP()}`);
+    // 1. Get the requested filename (remove the leading slash)
+    // The browser requests: http://ip:port/filename.pdf -> req.url is "/filename.pdf"
+    const requestedName = decodeURIComponent(req.url.slice(1)); 
+    console.log(`[Server] Request for: ${requestedName}`);
+
+    // 2. Find the file in our shared list
+    const fileObj = mySharedFiles.find(f => f.name === requestedName);
+
+    if (fileObj) {
+      // 3. STREAM THE REAL FILE
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream', // Force download
+        'Content-Disposition': `attachment; filename="${fileObj.name}"`
+      });
+      const readStream = fs.createReadStream(fileObj.path);
+      readStream.pipe(res); // Send file chunks to the friend
+    } else {
+      res.writeHead(404);
+      res.end('File not found');
+    }
   });
 
   server.listen(myPort, () => {
-    console.log(`[Electron] File Server running on Port ${myPort}`);
+    console.log(`[Server] File Server running on Port ${myPort}`);
     connectToTracker();
   });
 }
 
-// --- C. CONNECT TO TRACKER ---
+// --- CONNECT TO TRACKER ---
 async function connectToTracker() {
   const myIP = getLocalIP();
-  console.log(`[Electron] Connecting to Tracker at ${TRACKER_URL} as ${myIP}`);
-
   try {
-    // Dynamic import to fix ESM/CommonJS conflict
     const socketIoModule = await import("socket.io-client");
     const io = socketIoModule.io || socketIoModule.default;
-    const socket = io(TRACKER_URL);
+    socket = io(TRACKER_URL);
 
     socket.on('connect', () => {
-      console.log('[Electron] Connected to Tracker!');
-      
-      // SEND REAL IP instead of localhost
-      socket.emit('register', { 
-          ip: myIP, 
-          port: myPort, 
-          files: myFiles 
-      });
-
-      if (mainWindow) {
-          mainWindow.webContents.send('my-info', { port: myPort, ip: myIP });
-      }
+      console.log('[Socket] Connected!');
+      updateTracker(); // Send my initial list (empty)
     });
 
     socket.on('peer-update', (peers) => {
       if (mainWindow) mainWindow.webContents.send('peer-update', peers);
     });
-
   } catch (error) {
-    console.error("Failed to connect to tracker:", error);
+    console.error("Connection failed:", error);
   }
 }
 
-// --- APP LIFECYCLE ---
+// Helper to update everyone about my files
+function updateTracker() {
+  if (!socket) return;
+  const myIP = getLocalIP();
+  // We only send file NAMES to the public, not full paths
+  const fileNames = mySharedFiles.map(f => f.name);
+  
+  socket.emit('register', { ip: myIP, port: myPort, files: fileNames });
+  
+  // Update my own UI
+  if (mainWindow) mainWindow.webContents.send('my-info', { ip: myIP, port: myPort, files: fileNames });
+}
+
+// --- 🟢 HANDLE FILE SELECTION (IPC) ---
+ipcMain.on('select-files', async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ['openFile', 'multiSelections']
+  });
+
+  if (!result.canceled) {
+    // Add new files to our list
+    result.filePaths.forEach(fullPath => {
+      const fileName = path.basename(fullPath);
+      // Prevent duplicates
+      if (!mySharedFiles.find(f => f.name === fileName)) {
+        mySharedFiles.push({ name: fileName, path: fullPath });
+      }
+    });
+    // Tell the world we have new files
+    updateTracker();
+  }
+});
+
 app.on('ready', () => {
   createWindow();
   startFileServer();
 });
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -139,3 +139,36 @@ app.on('ready', () => {
   startFileServer();
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+
+// ... existing code ...
+
+// 🟢 NEW: HANDLE IN-APP DOWNLOADS
+ipcMain.on('start-download', (event, { ip, port, fileName }) => {
+  const url = `http://${ip}:${port}/${fileName}`;
+  const downloadPath = path.join(app.getPath('downloads'), fileName);
+  
+  console.log(`[Electron] Downloading ${fileName} to ${downloadPath}`);
+
+  const file = fs.createWriteStream(downloadPath);
+  
+  http.get(url, (response) => {
+    if (response.statusCode !== 200) {
+      console.error("Download failed: File not found on peer");
+      return;
+    }
+    
+    response.pipe(file);
+
+    file.on('finish', () => {
+      file.close();
+      console.log("Download Completed!");
+      // Tell the Frontend it's done
+      event.sender.send('download-complete', fileName);
+    });
+  }).on('error', (err) => {
+    fs.unlink(downloadPath, () => {}); // Delete partial file
+    console.error("Network Error:", err.message);
+  });
+});
+
+// ... app.on('ready') ...

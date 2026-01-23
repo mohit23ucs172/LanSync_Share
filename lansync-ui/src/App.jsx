@@ -150,16 +150,24 @@ function App() {
     if (ipcRenderer) ipcRenderer.send("select-files");
   };
 
- const downloadFile = (ip, port, fileName) => {
-    const url = `http://${ip}:${port}/${fileName}`;
-    
-    // 🟢 FIX: Use Electron "shell" to open in the system browser (Chrome/Edge)
-    if (electron) {
-      const { shell } = window.require("electron");
-      shell.openExternal(url); 
+// Inside App function...
+  
+  // 🟢 1. Listen for completion
+  useEffect(() => {
+    if (ipcRenderer) {
+      ipcRenderer.on('download-complete', (event, fileName) => {
+        alert(`✅ Download Finished!\nSaved to Downloads folder: ${fileName}`);
+      });
+    }
+  }, []);
+
+  // 🟢 2. Send Download Command
+  const downloadFile = (ip, port, fileName) => {
+    if (ipcRenderer) {
+      // Tell Electron to handle the download internally
+      ipcRenderer.send('start-download', { ip, port, fileName });
     } else {
-      // Fallback for web mode
-      window.open(url, "_blank");
+      console.log("Not in Electron mode");
     }
   };
 

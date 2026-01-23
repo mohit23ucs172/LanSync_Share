@@ -4,10 +4,12 @@ const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const isDev = require('electron-is-dev');
 const http = require('http');
-const os = require('os'); // Added to find Wi-Fi IP
+const os = require('os'); 
 
 // --- CONFIGURATION ---
-const TRACKER_URL = process.env.TRACKER_URL 
+// 🔴 FIX: We removed process.env.TRACKER_URL because it fails in the .exe
+// 🟢 WE HARDCODED YOUR RENDER URL HERE:
+const TRACKER_URL = 'https://lansync-backend.onrender.com';
 
 let mainWindow;
 let myPort;

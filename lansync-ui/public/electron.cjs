@@ -20,9 +20,20 @@ let mySharedFiles = [];
 
 function getLocalIP() {
   const nets = os.networkInterfaces();
+  const results = [];
+
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
-      if (net.family === 'IPv4' && !net.internal) return net.address;
+      // Skip internal (localhost) and non-IPv4
+      if (net.family === 'IPv4' && !net.internal) {
+        // 🟢 FILTER: Ignore "Virtual", "VMware", and "vEthernet" adapters
+        // We prefer interfaces that look like real Wi-Fi
+        if (!name.toLowerCase().includes('virtual') && 
+            !name.toLowerCase().includes('vmware') && 
+            !name.toLowerCase().includes('pseudo')) {
+            return net.address;
+        }
+      }
     }
   }
   return 'localhost';

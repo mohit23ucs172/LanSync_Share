@@ -150,9 +150,17 @@ function App() {
     if (ipcRenderer) ipcRenderer.send("select-files");
   };
 
-  const downloadFile = (ip, port, fileName) => {
+ const downloadFile = (ip, port, fileName) => {
     const url = `http://${ip}:${port}/${fileName}`;
-    window.open(url, "_blank");
+    
+    // 🟢 FIX: Use Electron "shell" to open in the system browser (Chrome/Edge)
+    if (electron) {
+      const { shell } = window.require("electron");
+      shell.openExternal(url); 
+    } else {
+      // Fallback for web mode
+      window.open(url, "_blank");
+    }
   };
 
   // Safe check for peer count

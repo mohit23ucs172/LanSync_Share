@@ -116,7 +116,7 @@ function App() {
   };
 
   const localLink = `http://${myInfo.localIP}:5173`;
-  const vercelLink = `https://lan-sync-share.vercel.app?host=${myInfo.publicIP}`;
+  const vercelLink = `https://lan-sync-share.vercel.app/?host=${myInfo.publicIP}`;
 
   if (!isLoggedIn) {
     return (

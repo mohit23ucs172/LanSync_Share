@@ -1,8 +1,13 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
-// https://vite.dev/config/
+// https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: './',
+  server: {
+    host: true,  // 🟢 THIS IS THE KEY! It exposes the app to your Wi-Fi/Hotspot
+    port: 5173,  // Keeps the port fixed
+    strictPort: true,
+  }
 })
+

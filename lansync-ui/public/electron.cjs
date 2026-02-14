@@ -9,30 +9,29 @@ const localtunnel = require('localtunnel');
 const formidable = require('formidable'); 
 
 const FILE_PORT = 5000; 
-
 let mainWindow;
 let myLocalIP = "";
 let myPublicURL = ""; 
+let currentPasscode = "0000"; 
 let mySharedFiles = []; 
 let receivedFiles = []; 
-
-// 🟢 NEW: Track Connected Devices
-// We store IPs of devices that pinged us recently
-let connectedPeers = new Map(); 
+let authenticatedPeers = new Map(); 
 
 function getLocalIP() {
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
       if (net.family === 'IPv4' && !net.internal) {
-        const lowerName = name.toLowerCase();
-        if (!lowerName.includes('virtual') && !lowerName.includes('vmware') && !lowerName.includes('wsl')) {
-            return net.address;
-        }
+        if (!name.toLowerCase().includes('virtual')) return net.address;
       }
     }
   }
   return 'localhost';
+}
+
+function generatePasscode() {
+    currentPasscode = Math.floor(1000 + Math.random() * 9000).toString();
+    updateFrontend();
 }
 
 function createWindow() {
@@ -46,124 +45,98 @@ function createWindow() {
 
 async function startFileServer() {
   myLocalIP = getLocalIP();
-
   const server = http.createServer((req, res) => {
     res.setHeader('Access-Control-Allow-Origin', '*'); 
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Bypass-Tunnel-Reminder', 'true');
 
-    // 🟢 TRACKING LOGIC: If someone asks for files, they are "Connected"
     const clientIP = req.socket.remoteAddress;
-    if (clientIP) {
-        connectedPeers.set(clientIP, Date.now());
-        cleanOldPeers(); // Remove stale connections
+
+    // 🟢 LOGIN API
+    if (req.method === 'POST' && req.url === '/api/login') {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', () => {
+        const { passcode } = JSON.parse(body);
+        if (passcode === currentPasscode) {
+          authenticatedPeers.set(clientIP, Date.now());
+          res.end(JSON.stringify({ success: true, hostName: os.hostname() }));
+        } else {
+          res.writeHead(401); res.end(JSON.stringify({ success: false }));
+        }
+      });
+      return;
     }
 
-    // API: List Files
+    // Auth Gate
+    if (!authenticatedPeers.has(clientIP) && req.url !== '/api/login') {
+      res.writeHead(403); res.end("Login Required");
+      return;
+    }
+
+    // 🟢 API: LIST FILES FOR PHONE
     if (req.method === 'GET' && req.url === '/api/files') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(mySharedFiles.map(f => f.name)));
       return;
     }
 
-    // API: RECEIVE FILE
+    // 🟢 API: RECEIVE FROM PHONE
     if (req.method === 'POST' && req.url === '/api/upload') {
       const form = new formidable.IncomingForm();
-      form.uploadDir = os.tmpdir(); 
-      form.keepExtensions = true;
-
+      form.uploadDir = os.tmpdir(); form.keepExtensions = true;
       form.parse(req, (err, fields, files) => {
-        if (err) { res.writeHead(500); res.end('Error'); return; }
-        
         const uploadedFile = files.file[0] || files.file;
-        const senderName = fields.sender ? (Array.isArray(fields.sender) ? fields.sender[0] : fields.sender) : "Unknown Device";
-
-        const fileData = {
-            id: Date.now(),
-            name: uploadedFile.originalFilename,
-            path: uploadedFile.filepath,
-            size: (uploadedFile.size / 1024 / 1024).toFixed(2) + " MB",
-            sender: senderName
-        };
-
-        receivedFiles.push(fileData);
-        updateFrontend();
-        
-        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        receivedFiles.push({ id: Date.now(), name: uploadedFile.originalFilename, path: uploadedFile.filepath, sender: fields.sender || "Peer" });
+        updateFrontend(); 
         res.end('Success');
       });
       return;
     }
 
-    // API: DOWNLOAD
+    // 🟢 API: DOWNLOAD FROM PC
     const requestedName = decodeURIComponent(req.url.slice(1)); 
     const fileObj = mySharedFiles.find(f => f.name === requestedName);
     if (fileObj) {
-      res.writeHead(200, {
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="${fileObj.name}"`
-      });
+      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
       fs.createReadStream(fileObj.path).pipe(res);
-    } else {
-      res.writeHead(404); res.end('File not found');
     }
   });
 
   server.listen(FILE_PORT, async () => {
-    console.log(`[Server] Running at http://${myLocalIP}:${FILE_PORT}`);
+    generatePasscode();
     try {
       const tunnel = await localtunnel({ port: FILE_PORT });
       myPublicURL = tunnel.url; 
     } catch (err) { myPublicURL = "Offline"; }
     updateFrontend();
-    
-    // Periodically update UI to show device count changes
-    setInterval(updateFrontend, 2000);
   });
-}
-
-// 🟢 Remove devices that haven't pinged in 10 seconds
-function cleanOldPeers() {
-    const now = Date.now();
-    for (const [ip, lastSeen] of connectedPeers.entries()) {
-        if (now - lastSeen > 10000) {
-            connectedPeers.delete(ip);
-        }
-    }
-    updateFrontend();
 }
 
 function updateFrontend() {
   if (mainWindow) mainWindow.webContents.send('refresh-data', { 
-      localIP: myLocalIP, 
-      publicIP: myPublicURL,
-      shared: mySharedFiles.map(f => f.name),
-      received: receivedFiles,
-      connectedCount: connectedPeers.size // 🟢 Send Count
+      localIP: myLocalIP, publicIP: myPublicURL,
+      shared: mySharedFiles.map(f => f.name), received: receivedFiles,
+      connectedCount: authenticatedPeers.size, passcode: currentPasscode 
   });
 }
 
-ipcMain.on('save-received-file', async (event, fileId) => {
-    const file = receivedFiles.find(f => f.id === fileId);
-    if(!file) return;
-    const { filePath } = await dialog.showSaveDialog({ defaultPath: file.name });
-    if (filePath) {
-        fs.copyFile(file.path, filePath, (err) => {
-            if (!err) event.sender.send('file-saved-success', file.name);
-        });
-    }
-});
-
+// IPC Events for Sharing Control
+ipcMain.on('remove-file', (e, name) => { mySharedFiles = mySharedFiles.filter(f => f.name !== name); updateFrontend(); });
 ipcMain.on('select-files', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });
   if (!result.canceled) {
-    result.filePaths.forEach(fullPath => {
-      const fileName = path.basename(fullPath);
-      if (!mySharedFiles.find(f => f.name === fileName)) mySharedFiles.push({ name: fileName, path: fullPath });
+    result.filePaths.forEach(p => {
+      const name = path.basename(p);
+      if (!mySharedFiles.find(f => f.name === name)) mySharedFiles.push({ name, path: p });
     });
     updateFrontend();
   }
 });
-
+ipcMain.on('save-received-file', async (e, id) => {
+    const file = receivedFiles.find(f => f.id === id);
+    const { filePath } = await dialog.showSaveDialog({ defaultPath: file.name });
+    if (filePath) fs.copyFile(file.path, filePath, () => e.sender.send('file-saved-success', file.name));
+});
 ipcMain.on('request-init', () => updateFrontend());
 app.on('ready', () => { createWindow(); startFileServer(); });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

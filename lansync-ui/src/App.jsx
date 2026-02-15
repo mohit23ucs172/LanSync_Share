@@ -66,7 +66,7 @@ function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
   const [passcode, setPasscode] = useState("");
   const [hostFiles, setHostFiles] = useState([]);
-  const [myInfo, setMyInfo] = useState({ localIP: "", publicIP: "", shared: [], received: [], passcode: "----" });
+  const [myInfo, setMyInfo] = useState({ localIP: "", publicIP: "", shared: [], received: [], passcode: "----", port: 5000 });
   const [uploadStatus, setUploadStatus] = useState("");
 
   useEffect(() => {
@@ -77,12 +77,29 @@ function App() {
     }
   }, []);
 
-  // 🟢 FIX 1: Point to Port 5000 (Backend) not 5173 (Frontend)
-  const serverPort = 5000; 
+  // 🟢 SMART PORT SELECTION
+  // If in Dev Mode (npm start), phone uses Vite Port (5173)
+  // If in Prod Mode (.exe), phone uses Electron Backend Port (Dynamic, usually 5000)
+  const isDev = !process.env.NODE_ENV || process.env.NODE_ENV === 'development';
+  // If we are in Dev, force 5173 for the phone link. Otherwise, use the port sent by Electron.
+  const appPort = isDev ? "5173" : (myInfo.port || "5000");
+  
+  // 🟢 Link Construction
+  const localLink = `http://${myInfo.localIP}:${appPort}`;
+  const vercelLink = `https://lan-sync-share.vercel.app/?host=${encodeURIComponent(myInfo.publicIP)}`;
 
-  // 🟢 FIX 2: Add Headers to bypass Tunnel Warning Page
+  // 🟢 HOST DETERMINATION (For Logic inside the App)
+  // When making API calls from the browser, we need to know where to send them.
+  // In the .exe, window.location.hostname is empty or file://, so we rely on the input or query param.
+  const getApiHost = () => {
+      const paramHost = new URLSearchParams(window.location.search).get('host');
+      if (paramHost) return paramHost;
+      // If no param, assume we are on the same network
+      return `http://${window.location.hostname}:${appPort}`;
+  };
+
   const handleLogin = async () => {
-    const host = new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:${serverPort}`;
+    const host = getApiHost();
     try {
       const res = await fetch(`${host}/api/login`, { 
         method: 'POST', 
@@ -118,7 +135,7 @@ function App() {
     const file = e.target.files[0]; if (!file) return;
     setUploadStatus("Uploading...");
     const formData = new FormData(); formData.append("file", file);
-    const host = new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:${serverPort}`;
+    const host = getApiHost();
     try {
       await fetch(`${host}/api/upload`, { 
           method: "POST", 
@@ -136,9 +153,6 @@ function App() {
     setUploadStatus("📋 Link Copied!");
     setTimeout(() => setUploadStatus(""), 2000);
   };
-
-  const localLink = `http://${myInfo.localIP}:${serverPort}`;
-  const vercelLink = `https://lan-sync-share.vercel.app/?host=${encodeURIComponent(myInfo.publicIP)}`;
 
   if (!isLoggedIn) {
     return (
@@ -201,7 +215,7 @@ function App() {
                 {ipcRenderer ? (
                   <button style={styles.deselect} onClick={() => ipcRenderer.send('remove-file', f)}>Deselect</button>
                 ) : (
-                  <button style={styles.actionBtn} onClick={() => window.open(`${new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:${serverPort}`}/${f}`)}>Download</button>
+                  <button style={styles.actionBtn} onClick={() => window.open(`${getApiHost()}/${f}`)}>Download</button>
                 )}
               </div>
             ))}

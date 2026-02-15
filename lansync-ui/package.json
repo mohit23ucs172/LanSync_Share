@@ -7,13 +7,13 @@
   "private": true,
   "type": "module",
   "main": "public/electron.cjs",
-  "scripts": {
-    "build": "vite build",
-    "dev": "vite",
-    "electron": "wait-on tcp:5173 && electron .",
-    "start": "concurrently \"npm run dev\" \"npm run electron\"",
-    "dist": "vite build && electron-builder"
-  },
+ "scripts": {
+  "dev": "vite --host", 
+  "electron": "wait-on tcp:5173 && electron .",
+  "start": "concurrently \"npm run dev\" \"npm run electron\"",
+  "build": "vite build",
+  "dist": "vite build && electron-builder"
+},
   "dependencies": {
     "concurrently": "^9.2.1",
     "cross-env": "^10.1.0",

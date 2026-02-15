@@ -9,7 +9,7 @@ const localtunnel = require('localtunnel');
 const formidable = require('formidable');
 
 // 🟢 Global Variables
-let FILE_PORT = 5000; // Start checking from 5000
+let FILE_PORT = 5000;
 let mainWindow;
 let myLocalIP = "";
 let myPublicURL = "";
@@ -18,73 +18,59 @@ let mySharedFiles = [];
 let receivedFiles = [];
 let authenticatedPeers = new Map();
 
-// 🟢 Helper: Get Local Wi-Fi IP
+// 🟢 FIX 1: Smart IP Discovery (Ignores Virtual Adapters)
 function getLocalIP() {
   const nets = os.networkInterfaces();
   for (const name of Object.keys(nets)) {
     for (const net of nets[name]) {
+      // Skip internal (localhost) and non-IPv4
       if (net.family === 'IPv4' && !net.internal) {
-        if (!name.toLowerCase().includes('virtual')) return net.address;
+        const nameLower = name.toLowerCase();
+        // Skip VMware, VirtualBox, WSL, etc.
+        if (!nameLower.includes('virtual') && !nameLower.includes('wsl') && !nameLower.includes('vmware') && !nameLower.includes('pseudo')) {
+            return net.address;
+        }
       }
     }
   }
   return 'localhost';
 }
 
-// 🟢 Helper: Generate New Passcode
 function generatePasscode() {
   currentPasscode = Math.floor(1000 + Math.random() * 9000).toString();
   updateFrontend();
 }
 
-// 🟢 Window Creation
 function createWindow() {
   mainWindow = new BrowserWindow({
-    width: 1300,
-    height: 900,
-    titleBarStyle: 'hidden',
-    webPreferences: {
-      nodeIntegration: true,
-      contextIsolation: false,
-      webSecurity: false // 🟢 Important for loading local files in some envs
-    },
+    width: 1300, height: 900, titleBarStyle: 'hidden',
+    webPreferences: { nodeIntegration: true, contextIsolation: false, webSecurity: false },
   });
 
-  // 🟢 PRODUCTION FIX: Load file path correctly
   if (isDev) {
     mainWindow.loadURL('http://localhost:5173');
-    // mainWindow.webContents.openDevTools(); // Optional: Open DevTools in Dev
   } else {
-    // This looks for index.html in the 'dist' folder relative to this script
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
-
   mainWindow.on('closed', () => (mainWindow = null));
 }
 
-// 🟢 File Server Logic
+// 🟢 FIX 2: Serve Static Files (Makes Port 5000 a Real Web Server)
 async function startFileServer() {
   myLocalIP = getLocalIP();
 
   const server = http.createServer((req, res) => {
-    // 🟢 CRITICAL CORS FIX: Allow the phone to talk to the laptop
+    // CORS Headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    // Allow the custom header we added in App.jsx
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Bypass-Tunnel-Reminder'); 
-    res.setHeader('Bypass-Tunnel-Reminder', 'true'); 
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Bypass-Tunnel-Reminder');
+    res.setHeader('Bypass-Tunnel-Reminder', 'true');
 
-    // 🟢 Handle Preflight (OPTIONS) request immediately
-    // Browsers send this first to check if they are allowed to connect
-    if (req.method === 'OPTIONS') {
-        res.writeHead(204);
-        res.end();
-        return;
-    }
+    if (req.method === 'OPTIONS') { res.writeHead(204); res.end(); return; }
 
     const clientIP = req.socket.remoteAddress;
 
-    // 1. LOGIN API
+    // --- API ROUTES ---
     if (req.method === 'POST' && req.url === '/api/login') {
       let body = '';
       req.on('data', chunk => { body += chunk.toString(); });
@@ -97,136 +83,107 @@ async function startFileServer() {
           } else {
             res.writeHead(401); res.end(JSON.stringify({ success: false }));
           }
-        } catch (e) { res.writeHead(400); res.end("Bad Request"); }
+        } catch (e) { res.writeHead(400); res.end("Bad"); }
       });
       return;
     }
 
-    // 2. Auth Check
-    if (!authenticatedPeers.has(clientIP) && req.url !== '/api/login') {
+    if (!authenticatedPeers.has(clientIP) && req.url !== '/api/login' && req.url.startsWith('/api/')) {
       res.writeHead(403); res.end("Login Required");
       return;
     }
 
-    // 3. List Files API
     if (req.method === 'GET' && req.url === '/api/files') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify(mySharedFiles.map(f => f.name)));
       return;
     }
 
-    // 4. Upload API
     if (req.method === 'POST' && req.url === '/api/upload') {
       const form = new formidable.IncomingForm();
-      form.uploadDir = os.tmpdir();
-      form.keepExtensions = true;
+      form.uploadDir = os.tmpdir(); form.keepExtensions = true;
       form.parse(req, (err, fields, files) => {
-        if (err) { res.writeHead(500); res.end("Upload Error"); return; }
         const uploadedFile = files.file[0] || files.file;
-        receivedFiles.push({
-          id: Date.now(),
-          name: uploadedFile.originalFilename,
-          path: uploadedFile.filepath,
-          sender: fields.sender || "Peer"
-        });
+        receivedFiles.push({ id: Date.now(), name: uploadedFile.originalFilename, path: uploadedFile.filepath, sender: fields.sender || "Peer" });
         updateFrontend();
         res.end('Success');
       });
       return;
     }
 
-    // 5. Download API
-    // Remove the leading slash and decode spaces
-    const requestedName = decodeURIComponent(req.url.slice(1));
-    const fileObj = mySharedFiles.find(f => f.name === requestedName);
+    // --- FILE DOWNLOAD & STATIC SERVING ---
+    const requestedPath = decodeURIComponent(req.url.slice(1));
     
-    if (fileObj) {
-      res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
-      fs.createReadStream(fileObj.path).pipe(res);
+    // 1. Check if it's a shared file download
+    const sharedFile = mySharedFiles.find(f => f.name === requestedPath);
+    if (sharedFile) {
+        res.writeHead(200, { 'Content-Type': 'application/octet-stream' });
+        fs.createReadStream(sharedFile.path).pipe(res);
+        return;
+    }
+
+    // 2. Serve Frontend Files (dist folder) for Production
+    // If not an API, try to serve the file from ../dist
+    let localPath = path.join(__dirname, '../dist', requestedPath === '' ? 'index.html' : requestedPath);
+    
+    // Safety check to ensure we don't serve files outside dist
+    if (!localPath.startsWith(path.join(__dirname, '../dist'))) localPath = path.join(__dirname, '../dist/index.html');
+
+    if (fs.existsSync(localPath) && fs.lstatSync(localPath).isFile()) {
+        const ext = path.extname(localPath);
+        const mimeTypes = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.svg': 'image/svg+xml' };
+        res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+        fs.createReadStream(localPath).pipe(res);
     } else {
-      // If not an API call and file not found, 404
-      if (!req.url.startsWith('/api/')) {
-         res.writeHead(404); res.end("File not found");
-      }
+        // Fallback to index.html for React Router (SPA)
+        const indexPath = path.join(__dirname, '../dist/index.html');
+        if (fs.existsSync(indexPath)) {
+             res.writeHead(200, { 'Content-Type': 'text/html' });
+             fs.createReadStream(indexPath).pipe(res);
+        } else {
+             res.writeHead(404); res.end("Not Found");
+        }
     }
   });
 
-  // 🟢 DYNAMIC PORT FINDER
-  // If 5000 is busy, it automatically moves to 5001, 5002, etc.
   server.on('error', (e) => {
-    if (e.code === 'EADDRINUSE') {
-      console.log(`Port ${FILE_PORT} is busy, trying ${FILE_PORT + 1}...`);
-      FILE_PORT++;
-      server.listen(FILE_PORT);
-    }
+    if (e.code === 'EADDRINUSE') { FILE_PORT++; server.listen(FILE_PORT, '0.0.0.0'); }
   });
 
-  server.listen(FILE_PORT, async () => {
+  // 🟢 LISTEN ON 0.0.0.0 (Accepts connections from Hotspot/Wi-Fi)
+  server.listen(FILE_PORT, '0.0.0.0', async () => {
     console.log(`Server running on port ${FILE_PORT}`);
     generatePasscode();
-    try {
-      // Create the tunnel on the correct port
-      const tunnel = await localtunnel({ port: FILE_PORT });
-      myPublicURL = tunnel.url;
-    } catch (err) {
-      myPublicURL = "Offline";
-    }
+    try { const tunnel = await localtunnel({ port: FILE_PORT }); myPublicURL = tunnel.url; } catch (err) { myPublicURL = "Offline"; }
     updateFrontend();
   });
 }
 
-// 🟢 Frontend Updater
 function updateFrontend() {
   if (mainWindow) {
     mainWindow.webContents.send('refresh-data', {
-      localIP: myLocalIP,
-      publicIP: myPublicURL,
-      shared: mySharedFiles.map(f => f.name),
-      received: receivedFiles,
-      connectedCount: authenticatedPeers.size,
-      passcode: currentPasscode
+      localIP: myLocalIP, publicIP: myPublicURL, shared: mySharedFiles.map(f => f.name),
+      received: receivedFiles, connectedCount: authenticatedPeers.size, passcode: currentPasscode,
+      port: FILE_PORT // Send real port to UI
     });
   }
 }
 
-// 🟢 IPC Events
-ipcMain.on('remove-file', (e, name) => {
-  mySharedFiles = mySharedFiles.filter(f => f.name !== name);
-  updateFrontend();
-});
-
+// IPC Events
+ipcMain.on('remove-file', (e, name) => { mySharedFiles = mySharedFiles.filter(f => f.name !== name); updateFrontend(); });
 ipcMain.on('select-files', async () => {
   const result = await dialog.showOpenDialog({ properties: ['openFile', 'multiSelections'] });
   if (!result.canceled) {
-    result.filePaths.forEach(p => {
-      const name = path.basename(p);
-      if (!mySharedFiles.find(f => f.name === name)) {
-        mySharedFiles.push({ name, path: p });
-      }
-    });
+    result.filePaths.forEach(p => { if (!mySharedFiles.find(f => f.name === path.basename(p))) mySharedFiles.push({ name: path.basename(p), path: p }); });
     updateFrontend();
   }
 });
-
 ipcMain.on('save-received-file', async (e, id) => {
   const file = receivedFiles.find(f => f.id === id);
   if (!file) return;
   const { filePath } = await dialog.showSaveDialog({ defaultPath: file.name });
-  if (filePath) {
-    fs.copyFile(file.path, filePath, () => {
-        // success callback
-    });
-  }
+  if (filePath) fs.copyFile(file.path, filePath, () => {});
 });
-
 ipcMain.on('request-init', () => updateFrontend());
-
-// 🟢 App Lifecycle
-app.on('ready', () => {
-  createWindow();
-  startFileServer();
-});
-
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit();
-});
+app.on('ready', () => { createWindow(); startFileServer(); });
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -55,8 +55,8 @@
       "main": "public/electron.cjs"
     },
     "win": {
-      "target": "nsis",
-      "icon": "public/icon.ico"
+      "target": "nsis"
+      
     }
   }
 }

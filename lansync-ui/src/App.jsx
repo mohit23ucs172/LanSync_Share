@@ -77,10 +77,21 @@ function App() {
     }
   }, []);
 
+  // 🟢 FIX 1: Point to Port 5000 (Backend) not 5173 (Frontend)
+  const serverPort = 5000; 
+
+  // 🟢 FIX 2: Add Headers to bypass Tunnel Warning Page
   const handleLogin = async () => {
-    const host = new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:5000`;
+    const host = new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:${serverPort}`;
     try {
-      const res = await fetch(`${host}/api/login`, { method: 'POST', body: JSON.stringify({ passcode }) });
+      const res = await fetch(`${host}/api/login`, { 
+        method: 'POST', 
+        headers: { 
+            "Content-Type": "application/json",
+            "Bypass-Tunnel-Reminder": "true" 
+        },
+        body: JSON.stringify({ passcode }) 
+      });
       const data = await res.json();
       if (data.success) { 
         setIsLoggedIn(true); 
@@ -88,11 +99,18 @@ function App() {
       } else {
         alert("Wrong Passcode!");
       }
-    } catch (e) { alert("Connection Error"); }
+    } catch (e) { alert("Connection Error: " + e.message); }
   };
 
   const startPolling = (host) => {
-    const fetchFiles = async () => { try { const res = await fetch(`${host}/api/files`); setHostFiles(await res.json()); } catch (e) { } };
+    const fetchFiles = async () => { 
+        try { 
+            const res = await fetch(`${host}/api/files`, {
+                headers: { "Bypass-Tunnel-Reminder": "true" }
+            }); 
+            setHostFiles(await res.json()); 
+        } catch (e) { } 
+    };
     fetchFiles(); setInterval(fetchFiles, 3000);
   };
 
@@ -100,9 +118,13 @@ function App() {
     const file = e.target.files[0]; if (!file) return;
     setUploadStatus("Uploading...");
     const formData = new FormData(); formData.append("file", file);
-    const host = new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:5000`;
+    const host = new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:${serverPort}`;
     try {
-      await fetch(`${host}/api/upload`, { method: "POST", body: formData });
+      await fetch(`${host}/api/upload`, { 
+          method: "POST", 
+          headers: { "Bypass-Tunnel-Reminder": "true" },
+          body: formData 
+      });
       setUploadStatus("✅ Sent!");
       setTimeout(() => setUploadStatus(""), 3000);
     } catch (e) { setUploadStatus("❌ Failed"); }
@@ -115,8 +137,8 @@ function App() {
     setTimeout(() => setUploadStatus(""), 2000);
   };
 
-  const localLink = `http://${myInfo.localIP}:5173`;
-  const vercelLink = `https://lan-sync-share.vercel.app/?host=${myInfo.publicIP}`;
+  const localLink = `http://${myInfo.localIP}:${serverPort}`;
+  const vercelLink = `https://lan-sync-share.vercel.app/?host=${encodeURIComponent(myInfo.publicIP)}`;
 
   if (!isLoggedIn) {
     return (
@@ -179,7 +201,7 @@ function App() {
                 {ipcRenderer ? (
                   <button style={styles.deselect} onClick={() => ipcRenderer.send('remove-file', f)}>Deselect</button>
                 ) : (
-                  <button style={styles.actionBtn} onClick={() => window.open(`${new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:5000`}/${f}`)}>Download</button>
+                  <button style={styles.actionBtn} onClick={() => window.open(`${new URLSearchParams(window.location.search).get('host') || `http://${window.location.hostname}:${serverPort}`}/${f}`)}>Download</button>
                 )}
               </div>
             ))}
